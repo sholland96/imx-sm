@@ -477,6 +477,41 @@ static bool SRC_MixPowerDownPoll(uint32_t srcMixIdx, uint32_t timeoutUsec)
 }
 
 /*--------------------------------------------------------------------------*/
+/* Poll until MIX slice powered up completed or timeout reached             */
+/*--------------------------------------------------------------------------*/
+/*
+ * VCU FIX: added to bound SRC_MixSoftPowerUp()'s power-up wait, which was
+ * previously an unconditional "while (!SRC_MixPowerUpCompleted()) {;}" --
+ * for a mix whose hardware never completes power-up (e.g. this board's
+ * A55P mix, see project-a55-srcmix-stall-unresolved memory), that hung SM
+ * itself forever, tripping SM's own WDOG2 self-health watchdog and forcing
+ * a full system reset (taking down M7 and everything else too) instead of
+ * containing the failure to just the requesting caller. Mirrors the
+ * existing SRC_MixPowerDownPoll() pattern. Not present in upstream imx-sm.
+ */
+static bool SRC_MixPowerUpPoll(uint32_t srcMixIdx, uint32_t timeoutUsec)
+{
+    bool rc = false;
+
+    if (srcMixIdx < PWR_NUM_MIX_SLICE)
+    {
+        uint32_t pollUsec = 0U;
+
+        rc = SRC_MixPowerUpCompleted(srcMixIdx);
+
+        /* Poll until MIX power up complete or timeout reached */
+        while ((!rc) && (pollUsec < timeoutUsec))
+        {
+            SystemTimeDelay(1U);
+            ++pollUsec;
+            rc = SRC_MixPowerUpCompleted(srcMixIdx);
+        }
+    }
+
+    return rc;
+}
+
+/*--------------------------------------------------------------------------*/
 /* Poll until MIX slice has exited the reset phase or timeout reached       */
 /*--------------------------------------------------------------------------*/
 static bool SRC_MixRstExitPoll(uint32_t srcMixIdx, uint32_t timeoutUsec)
@@ -663,11 +698,18 @@ bool SRC_MixSoftPowerUp(uint32_t srcMixIdx)
                 /* Request software-controlled power down */
                 srcMix->SLICE_SW_CTRL |= SLICE_SW_CTRL_PDN_SOFT_MASK;
 
-                /* Wait for power down sequence to compete */
-                while (!SRC_MixPowerDownCompleted(srcMixIdx))
-                {
-                    ; /* Intentional empty while */
-                }
+                /*
+                 * VCU FIX: bounded wait, mirrors the power-up fix below --
+                 * this forced power-down step (diagForceA55Cycle, added for
+                 * A55-family mixes above) had its own unbounded busy-wait
+                 * that turned out to be the actual hang once the power-up
+                 * wait was fixed: A55P's forced power-down never completes
+                 * either (matches project-a55-srcmix-stall-unresolved
+                 * memory's finding that the hardware doesn't respond to
+                 * software power control in either direction for this
+                 * mix). Not present in upstream imx-sm.
+                 */
+                (void) SRC_MixPowerDownPoll(srcMixIdx, 20000U);
 
                 /* Restore A55 handshake */
                 SRC_MixSetA55HdskMode(srcMixIdx, SRC_MIX_A55_HDSK_ACK_WAIT);
@@ -699,32 +741,31 @@ bool SRC_MixSoftPowerUp(uint32_t srcMixIdx)
             /* Request software-controlled power up */
             srcMix->SLICE_SW_CTRL &= ~SLICE_SW_CTRL_PDN_SOFT_MASK;
 
-            /* Wait for power up sequence to complete */
-            while (!SRC_MixPowerUpCompleted(srcMixIdx))
-            {
-                ; /* Intentional empty while */
-            }
-
             /*
-             * VCU DIAGNOSTIC: tested waiting for MTR_DONE here (scoped to
-             * M7's mix only) after confirming via register read that
-             * M7's CM7_LOCKUP fault fires with BUSY_MTR=1 (MTR not done)
-             * despite the early-boot MTR_ACK_CTRL timeout workaround
-             * (CNT_MODE=3) being active on this mix. Result: SM itself
-             * hangs forever in this loop (confirmed via WDOG2 PC landing
-             * inside SRC_MixSoftPowerUp() at this exact offset) --
-             * MTR_DONE never asserts even in timeout mode. This means
-             * checking MTR_DONE is not a viable bounded synchronization
-             * point, which is presumably exactly why upstream's
-             * PWR_MIX_FUNC_STAT_MASK deliberately excludes it. Reverted;
-             * the MTR-busy state observed at the fault is very likely
-             * incidental/expected background activity, not the actual
-             * cause of the lockup. Do not re-add this wait without new
-             * evidence -- see project-sdboot-regression-unresolved memory.
+             * VCU FIX: bounded wait (was an unconditional busy-wait) -- see
+             * SRC_MixPowerUpPoll() comment above for why. First attempt
+             * used 500ms and still tripped SM's own self-health watchdog
+             * (WDOG2/NMI) -- its actual threshold is apparently shorter
+             * than the ~2s previously assumed for it (that figure may have
+             * actually described BOARD_WDOG, a different, already-disabled
+             * watchdog). Reduced to 20ms, well under whatever WDOG2's real
+             * threshold is, while still enough to distinguish "succeeded
+             * quickly" from "genuinely stuck" (this board's A55P mix stalls
+             * indefinitely regardless of timeout length, per
+             * project-a55-srcmix-stall-unresolved memory, so exact
+             * duration doesn't affect correctness, only safety margin).
+             * On timeout, trans stays false so the caller does not treat
+             * this as a completed transition (matches the "mix was already
+             * on, nothing to do" case it already had to handle) -- the
+             * failure is contained to this one request instead of hanging
+             * SM itself and forcing a full system reset. Not present in
+             * upstream imx-sm.
              */
-
-            /* Indicate a transition happened */
-            trans = true;
+            if (SRC_MixPowerUpPoll(srcMixIdx, 20000U))
+            {
+                /* Indicate a transition happened */
+                trans = true;
+            }
         }
 
         /* Restore GPC LP handshake */
