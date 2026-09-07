@@ -991,8 +991,23 @@ bool CPU_RunModeSet(uint32_t cpuIdx, uint32_t runMode)
                     /* if CPU stopped, power up respective mix and release */
                     if (curRunMode == CPU_RUN_MODE_STOP)
                     {
-                        /* Make sure MIX of CPU is powered */
-                        (void) SRC_MixSoftPowerUp(s_cpuMgmtInfo[cpuIdx].srcMixIdx);
+                        /*
+                         * SRC_MixSoftPowerUp() unconditionally switches this
+                         * mix from hardware- to software-controlled power
+                         * management before doing anything else. Confirmed
+                         * via direct scope measurement on VDD_ARM that
+                         * taking that handoff on an already-hardware-powered
+                         * A55P mix causes this board's regulator to drop the
+                         * rail, and the following software "power up"
+                         * request never successfully reasserts it. Skip the
+                         * call entirely when the mix already reports fully
+                         * powered. Not present in upstream imx-sm.
+                         */
+                        if (!SRC_MixIsPwrReady(s_cpuMgmtInfo[cpuIdx].srcMixIdx))
+                        {
+                            /* Make sure MIX of CPU is powered */
+                            (void) SRC_MixSoftPowerUp(s_cpuMgmtInfo[cpuIdx].srcMixIdx);
+                        }
 
                         /* Include CPU in HW-controlled MIX voting logic */
                         rc = CPU_LpmConfigInit(cpuIdx);

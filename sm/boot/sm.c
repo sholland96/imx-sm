@@ -93,6 +93,22 @@ int main(int argc, const char * const argv[])
     /* Store boot start time */
     g_bootTime[SM_BT_START] = DEV_SM_Usec64Get();
 
+
+    /* VCU: this early MTR_ACK_CTRL timeout-mode write (CCMSRCGPCMIX,
+     * DDRMIX, M7MIX) was added in a prior session to chase what turned out
+     * to be the TRDC self-write hazard (see feedback-trdc-self-write-hazard
+     * memory) -- a completely different, now-understood and separately
+     * fixed mechanism. It was never proven to actually help SM's own
+     * stability, and it writes directly to M7MIX's own power-sequencer
+     * register very early, well before M7MIX's normal power-up path
+     * (SRC_MixSoftPowerUp() in fsl_src.c) would ever touch it. Removed as
+     * a direct test after the user pointed out M7 was rock-solid before
+     * this session's changes and pushed back on jumping to a hardware
+     * theory -- this early write to M7MIX specifically is the only
+     * pre-existing code found that touches M7's mix outside its normal
+     * boot sequence. Not present in upstream imx-sm; do not re-add without
+     * new evidence it's actually needed. */
+
 #ifdef INC_LIBC
     /* Configure stdio for no buffering */
     (void) setvbuf(stdin, NULL, _IONBF, 0);

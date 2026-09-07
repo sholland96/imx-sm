@@ -130,6 +130,7 @@ int32_t CONFIG_LoadRange(const uint32_t *base, const uint32_t *config,
                 status = SM_ERR_INVALID_PARAMETERS;
             }
         }
+
     }
 
     /* Return status */

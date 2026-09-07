@@ -635,8 +635,26 @@ bool SRC_MixSoftPowerUp(uint32_t srcMixIdx)
              * OFF state which requires MEM_LP_EN by forcing a power off cycle.
              * MIXes that default to OFF can be detected by inspecting the
              * MEM_STAT field.
+             *
+             * Confirmed on this board via direct scope measurement of
+             * VDD_ARM: A55P's mix enters with PSW_STAT already matching
+             * the "up" convention while RST_STAT/ISO_STAT/MEM_STAT still
+             * read their "down" pattern, so the MEM_STAT==0 test below
+             * never triggers and the plain "request power up" path below
+             * hangs forever waiting for PowerUpCompleted(). Force the full
+             * power-down-then-up cycle unconditionally for A55-family
+             * mixes specifically (scoped the same way
+             * SRC_MixSetA55HdskMode() already scopes itself, so this
+             * cannot affect any other mix). Not present in upstream
+             * imx-sm.
              */
-            if (0U == (srcMix->FUNC_STAT & FUNC_STAT_MEM_STAT_MASK))
+            bool diagForceA55Cycle =
+                (srcMixIdx == PWR_MIX_SLICE_IDX_A55P) ||
+                ((srcMixIdx >= PWR_MIX_SLICE_IDX_A55C0) &&
+                (srcMixIdx <= PWR_MIX_SLICE_IDX_A55C_LAST));
+
+            if ((0U == (srcMix->FUNC_STAT & FUNC_STAT_MEM_STAT_MASK)) ||
+                diagForceA55Cycle)
             {
                 /* Ignore A55 since it is already powered down */
                 SRC_MixSetA55HdskMode(srcMixIdx,
@@ -654,6 +672,29 @@ bool SRC_MixSoftPowerUp(uint32_t srcMixIdx)
                 /* Restore A55 handshake */
                 SRC_MixSetA55HdskMode(srcMixIdx, SRC_MIX_A55_HDSK_ACK_WAIT);
             }
+            else
+            {
+                /*
+                 * Upstream only arms the A55 handshake (ACK_WAIT) inside
+                 * the "defaults to OFF" branch above (MEM_STAT==0). For a
+                 * mix that reads MEM_STAT!=0 on entry (already
+                 * electrically on, per direct VDD_ARM scope measurement on
+                 * this board), that branch is skipped entirely, so the A55
+                 * handshake mode is left at whatever it defaulted to
+                 * (effectively ACK_IGNORE) and never armed.
+                 * SRC_MixPowerUpCompleted()'s "fully up" check requires
+                 * A55_HDSK_STAT to reach its acknowledged state alongside
+                 * PSW_STAT/MEM_STAT/etc (see PWR_MIX_FUNC_STAT_PUP) -- with
+                 * the handshake still in IGNORE mode, that bit never
+                 * resolves, so the wait below spins forever even though
+                 * the rail is genuinely powered. SRC_MixSetA55HdskMode()
+                 * is a no-op for any non-A55 mix (it checks srcMixIdx
+                 * internally), so calling it unconditionally here is safe
+                 * for every other caller of this function. Not present in
+                 * upstream imx-sm.
+                 */
+                SRC_MixSetA55HdskMode(srcMixIdx, SRC_MIX_A55_HDSK_ACK_WAIT);
+            }
 
             /* Request software-controlled power up */
             srcMix->SLICE_SW_CTRL &= ~SLICE_SW_CTRL_PDN_SOFT_MASK;
@@ -663,6 +704,24 @@ bool SRC_MixSoftPowerUp(uint32_t srcMixIdx)
             {
                 ; /* Intentional empty while */
             }
+
+            /*
+             * VCU DIAGNOSTIC: tested waiting for MTR_DONE here (scoped to
+             * M7's mix only) after confirming via register read that
+             * M7's CM7_LOCKUP fault fires with BUSY_MTR=1 (MTR not done)
+             * despite the early-boot MTR_ACK_CTRL timeout workaround
+             * (CNT_MODE=3) being active on this mix. Result: SM itself
+             * hangs forever in this loop (confirmed via WDOG2 PC landing
+             * inside SRC_MixSoftPowerUp() at this exact offset) --
+             * MTR_DONE never asserts even in timeout mode. This means
+             * checking MTR_DONE is not a viable bounded synchronization
+             * point, which is presumably exactly why upstream's
+             * PWR_MIX_FUNC_STAT_MASK deliberately excludes it. Reverted;
+             * the MTR-busy state observed at the fault is very likely
+             * incidental/expected background activity, not the actual
+             * cause of the lockup. Do not re-add this wait without new
+             * evidence -- see project-sdboot-regression-unresolved memory.
+             */
 
             /* Indicate a transition happened */
             trans = true;

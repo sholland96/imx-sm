@@ -402,8 +402,22 @@ void BOARD_InitTimers(void)
     s_wdogConfig.clockSource = BOARD_WDOG_CLK_SRC;
     s_wdogConfig.timeoutValue = BOARD_WDOG_TIMEOUT;
     s_wdogConfig.enableInterrupt = true;
+    /* VCU DIAGNOSTIC ONLY: testing whether this 2-second boot watchdog
+     * (armed here, not serviced until SM_SYSTICKENABLE() at the very end
+     * of main(), after BRD_SM_Init()+LMM_Init() both complete) is what's
+     * firing as CM33_LOCKUP, because DEV_SM_Init()'s work (including
+     * config_trdc.h's ~100 TRDC grants added to fix an earlier, different
+     * CM33_LOCKUP) may now take longer than 2 real seconds.
+     * timeoutValue is a uint16_t already at its hardware-max (0xFFFF is
+     * the longest this clock source can represent), so it can't simply
+     * be made longer -- skipping WDOG32_Init() entirely instead, to
+     * cleanly rule the watchdog in or out before designing the real fix.
+     * MUST be reverted -- this removes a real safety mechanism. Not
+     * present in upstream imx-sm. */
+#if 0
     WDOG32_Init(BOARD_WDOG_BASE_PTR, &s_wdogConfig);
     NVIC_SetPriority(BOARD_WDOG_IRQn, IRQ_PRIO_PREEMPT_CRITICAL);
+#endif
 
     /* Configure to just non-FCCU SM watchdogs */
     BLK_CTRL_S_AONMIX->WDOG_ANY_MASK = BOARD_WDOG_ANY_INIT;

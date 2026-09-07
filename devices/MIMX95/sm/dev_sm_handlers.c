@@ -892,6 +892,40 @@ static void FaultHandler(uint32_t faultId)
         .valid = true
     };
 
+    /* VCU DIAGNOSTIC ONLY: on an M7 lockup fault specifically (faultId==38),
+     * read back M7's last VCU_DiagCheckpoint() value via MU5 side-B's RR[0]
+     * (0x44620280), which mirrors whatever M7 last wrote to its own side-A
+     * TR[0] (0x44610200) -- see VCU_DiagCheckpoint()/Reset_Handler comments
+     * in the M7 project (scmi_platform.c, startup_MIMX9596_cm7.S). Tells us
+     * exactly how far M7 got before locking up. Deliberately narrow (not
+     * "any fault") and minimal -- this runs in ISR context (called from
+     * CM7_LOCKUP_IRQHandler), and printf() from an ISR can deadlock the
+     * shared LPUART driver if mainline code was itself mid-printf() when
+     * this asynchronous interrupt preempted it (confirmed: a broader/busier
+     * version of this diagnostic produced a WDOG2/NMI reset with SM's own
+     * saved PC inside LPUART_WriteBlocking). Keep this single print and
+     * nothing more here. Not present in upstream imx-sm. */
+    if (faultId == 38U)
+    {
+        /* VCU DIAGNOSTIC ONLY: also read M7's own SRC_XSPR mix status --
+         * FUNC_STAT (0x444648B4), MTR_ACK_CTRL (0x44464890), MTR_ACK_STAT
+         * (0x44464894) -- the exact same registers/technique that
+         * root-caused the A55P mix's power-sequencer stall (see
+         * project-a55-srcmix-stall-unresolved memory): a stuck/mixed
+         * FUNC_STAT bit pattern would mean M7's mix itself never finished
+         * powering up before the core was released, independent of any
+         * M7 firmware bug. Single combined printf to minimize ISR/UART
+         * reentrancy risk (a multi-sample version of this with a busy-wait
+         * loop between reads reintroduced a UART hang -- reverted, one
+         * clean read is enough given the fix below). Not present in
+         * upstream imx-sm. */
+        printf("SM DIAG: M7 lockup, MU5 RR[0]=0x%08lx FUNC_STAT=0x%08lx MTR_ACK_CTRL=0x%08lx MTR_ACK_STAT=0x%08lx\n",
+            (unsigned long) (*(volatile uint32_t *) 0x44620280U),
+            (unsigned long) (*(volatile uint32_t *) 0x444648B4U),
+            (unsigned long) (*(volatile uint32_t *) 0x44464890U),
+            (unsigned long) (*(volatile uint32_t *) 0x44464894U));
+    }
+
     /* Finalize fault flow */
     status = DEV_SM_FaultComplete(resetRec);
 
