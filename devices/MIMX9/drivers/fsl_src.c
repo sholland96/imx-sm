@@ -738,6 +738,40 @@ bool SRC_MixSoftPowerUp(uint32_t srcMixIdx)
                 SRC_MixSetA55HdskMode(srcMixIdx, SRC_MIX_A55_HDSK_ACK_WAIT);
             }
 
+            /*
+             * VCU FIX: workaround for a suspected MIMX95 analog of NXP
+             * silicon erratum ERR053228 ("CortexAMIX MTR repair can fail
+             * under certain conditions"). NXP's own real fix for this
+             * exact erratum on the sibling MIMX94 chip (imx-sm commit
+             * 494ec56, "SM-342 Delay the MTR sequence during mix
+             * powerup") writes a global SRC_GEN->CDC_RDC_CLKOFF_DURATION_CFG
+             * delay register once at boot, before any mix power-up. That
+             * exact register does not exist in MIMX95's SRC_GEN map
+             * (confirmed: grep of MIMX95_SRC_GEN.h finds no such field) --
+             * but MIMX95 has an analogous PER-MIX MTR_ACK_CTRL/
+             * MTR_ACK_STAT handshake in each mix's own SRC_XSPR block
+             * (offset 0x90/0x94), whose reset default (CNT_MODE=0, "wait
+             * forever for hardware MTR ack") is a plausible match for
+             * A55P's observed stuck MEM_STAT bit (see
+             * project-a55-srcmix-stall-unresolved memory's FUNC_STAT
+             * decode). Switch to CNT_MODE=3 (timeout mode: raise done on
+             * whichever of {ack, counter} comes first) with a max
+             * MTR_CNT_CFG, right before the power-up request below --
+             * scoped to A55P specifically (srcMixIdx check, not the
+             * broader diagForceA55Cycle, which also covers individual
+             * A55 cores never implicated in this investigation), using
+             * srcMix (== SRC_XSPR_CORTEXMIX_PLATFORM for this index, per
+             * SRC_MIX_BASE_PTRS/PWR_MIX_SLICE_IDX_A55P) rather than a
+             * hardcoded pointer, so this cannot affect any other mix.
+             * Not present in upstream imx-sm.
+             */
+            if (srcMixIdx == PWR_MIX_SLICE_IDX_A55P)
+            {
+                srcMix->MTR_ACK_CTRL =
+                    SRC_XSPR_MTR_ACK_CTRL_CNT_MODE(3U) |
+                    SRC_XSPR_MTR_ACK_CTRL_MTR_CNT_CFG(0xFFU);
+            }
+
             /* Request software-controlled power up */
             srcMix->SLICE_SW_CTRL &= ~SLICE_SW_CTRL_PDN_SOFT_MASK;
 
