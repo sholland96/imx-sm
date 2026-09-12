@@ -60,6 +60,51 @@ int32_t DEV_SM_BbmInit(void)
     int32_t status = SM_ERR_SUCCESS;
     uint32_t flags;
 
+    /*
+     * VCU FIX: explicitly configure the ONOFF button's (SW4 on
+     * FRDM-IMX95) debounce/timeout behavior in BBNSM_CTRL -- confirmed
+     * via grep that BBNSM_ButtonSetConfig() is never called anywhere in
+     * this board's (or mx95evk's) boot path, so these fields sit at
+     * whatever the raw silicon POR value is rather than anything
+     * software-chosen. Made explicit rather than assumed:
+     * - debounceTime left at the driver's own default (0 -> DEBOUNCE=
+     *   0b00 -> 50ms), matching what this project's SCMI_SYS_STATE_
+     *   FULL_SHUTDOWN + SW4 wake feature (Core/vcu_bbm.c, M7 repo) was
+     *   confirmed working with on real hardware.
+     * - turnOnTime explicitly set to 2 (TURN_ON_TIME=0b10 -> 100ms) --
+     *   confirmed on real hardware that the driver's own default (0 ->
+     *   500ms) is what made a genuine SW4 press feel like it needed to
+     *   be held for "about a second" to wake from the FULL_SHUTDOWN
+     *   state (IMX95RM.pdf 184.3.2.2.1: "In the OFF state, pmic_en_b is
+     *   activated if the button input signal asserts longer than
+     *   BBNSM_CTRL[TURN_ON_TIME]"). 100ms chosen over the faster 50ms
+     *   option: the reference manual describes TURN_ON_TIME and
+     *   DEBOUNCE as two independent mechanisms (debounce is explicitly
+     *   scoped to the power on/off *interrupts*, not confirmed to also
+     *   gate the pmic_en_b/TURN_ON_TIME path), so matching TURN_ON_TIME
+     *   to DEBOUNCE's own 50ms would NOT get extra protection from the
+     *   debounce filter on top -- 100ms was chosen for a bit more
+     *   margin against switch bounce/noise on the raw ONOFF line while
+     *   still being clearly faster than the 500ms default.
+     * - turnOffTime explicitly set to 3 (BTN_TIMEOUT=0b11, "Timeout
+     *   disabled. Long button presses will not request a power down.")
+     *   -- confirmed on real hardware/UM12472.pdf section 1.8 that
+     *   holding SW4 for ~5s+ while ON is documented to force an
+     *   uncommanded OFF; this board's VCU project wants ONOFF's only
+     *   effect to be the explicit SCMI_SYS_STATE_FULL_SHUTDOWN request
+     *   already made in software, not an independent hardware timeout
+     *   path triggering the same thing on its own regardless of press
+     *   duration. Not present in upstream imx-sm.
+     */
+    {
+        bbnsm_button_config_t btnConfig;
+
+        BBNSM_ButtonGetDefaultConfig(&btnConfig);
+        btnConfig.turnOnTime = 2U;
+        btnConfig.turnOffTime = 3U;
+        BBNSM_ButtonSetConfig(BBNSM, &btnConfig);
+    }
+
     /* Read status flags */
     flags = BBNSM_GetStatusFlags(BBNSM);
 

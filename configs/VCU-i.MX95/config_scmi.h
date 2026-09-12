@@ -81,6 +81,17 @@
         .cpuPerms[DEV_SM_CPU_M7P] = SM_SCMI_PERM_EXCLUSIVE, \
         .pdPerms[DEV_SM_PD_M7] = SM_SCMI_PERM_EXCLUSIVE, \
         .perfPerms[DEV_SM_PERF_M7] = SM_SCMI_PERM_EXCLUSIVE, \
+        /* System protocol permission (SCMI_SystemPowerStateSet), needed \
+         * for the vendor-defined SCMI_SYS_STATE_FULL_SHUTDOWN state -- a \
+         * full SoC power-off down to just the battery-backed BBSM domain \
+         * (BBNSM_SystemPowerOff()), woken by a physical press of SW4 \
+         * (the board's ONOFF button) causing a genuine cold reboot, not a \
+         * resume. Not representable in VCU-i.MX95.mex/SMCT at all -- \
+         * hand-added, will need to be reapplied if this file regenerates. \
+         * Per rpc_scmi_sys.c's own permission check, non-graceful full-SoC \
+         * states (>= SYS_STATE_FULL_SHUTDOWN) require SM_SCMI_PERM_EXCLUSIVE, \
+         * same tier already granted for the M7-domain-only perms above. */ \
+        .sysPerms = SM_SCMI_PERM_EXCLUSIVE, \
         .pinPerms[DEV_SM_PIN_GPIO_IO00] = SM_SCMI_PERM_EXCLUSIVE, \
         .pinPerms[DEV_SM_PIN_GPIO_IO01] = SM_SCMI_PERM_EXCLUSIVE, \
         .pinPerms[DEV_SM_PIN_GPIO_IO02] = SM_SCMI_PERM_EXCLUSIVE, \
